@@ -5,6 +5,7 @@
 #   tools/dump_phone.sh full     # everything: boot, kernel, user, resources, DSP, all NV, file system, ...
 #   tools/dump_phone.sh scan     # 4 KB from every other id 0x80000000-0f, 0x90000000-2f: finds partitions missing from the .pac
 #   tools/dump_phone.sh extra    # re-read running NV and hidden disk C: in full (larger than the caps of 'full')
+#   tools/dump_phone.sh nvrun    # only the running NV (0x90000003), ~30 s - take it fresh before patching it
 #   tools/dump_phone.sh hidden   # read the ids found by 'scan' (NV copy and three small areas)
 #
 # Needs: SPD = path to spd_dump (build: tools/build_spd_dump.sh), FDL_DIR = folder with fdl1.bin and fdl2.bin taken from
@@ -32,7 +33,9 @@ args=(--wait ${WAIT:-600} verbose ${VERB:-1} timeout 3000 keep_charge 1
       fdl "$FW/fdl2.bin" 0x80100000)
 rd() { args+=(read_flash "$1" 0 "$2" "$OUT/$3"); }     # id, size|auto, file name
 
-if [ "$MODE" = hidden ]; then                # ids found by 'scan' that are not in the .pac
+if [ "$MODE" = nvrun ]; then                 # just the running NV, fresh, right before patching and writing it back
+  rd 0x90000003 auto     nv_running.bin
+elif [ "$MODE" = hidden ]; then                # ids found by 'scan' that are not in the .pac
   rd 0x9000000f 0x100000 nv_copy_0f.bin        # starts like the fixed NV: backup copy?
   rd 0x90000020 0x400000 area_20.bin           # zeros at the start
   rd 0x9000001c 0x400000 area_1c.bin           # 0xFF at the start

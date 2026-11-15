@@ -70,8 +70,14 @@ def main():
     p = s.add_parser('images', help='выгрузить все картинки ресурсов (export_images.py)')
     p.add_argument('mmi_res'); p.add_argument('outdir')
 
+    p = s.add_parser('trim', help='обрезать ресурсы из бэкапа до реальных данных (sres_trim.py)')
+    p.add_argument('src'); p.add_argument('dst')
+
+    p = s.add_parser('write', help='ЗАПИСАТЬ раздел в телефон: ресурсы или рабочий NV (write_part.sh)')
+    p.add_argument('part', help='0x90000004 (ресурсы) или 0x90000003 (рабочий NV)'); p.add_argument('file')
+
     p = s.add_parser('dump', help='бэкап телефона, только чтение (dump_phone.sh)')
-    p.add_argument('mode', nargs='?', default='test', choices=['test', 'full', 'extra', 'scan', 'hidden'])
+    p.add_argument('mode', nargs='?', default='test', choices=['test', 'full', 'extra', 'scan', 'hidden', 'nvrun'])
 
     a = ap.parse_args()
     if not a.cmd or a.cmd == 'help':
@@ -84,6 +90,8 @@ def main():
     if a.cmd == 'pac': return run('pacwrite.py', a.src, a.dst, *a.replace).returncode
     if a.cmd == 'mockup': return run('mockup.py', *[x for x in (a.mmi_res, a.nvitem, a.user, a.out) if x]).returncode
     if a.cmd == 'images': return run('export_images.py', a.mmi_res, a.outdir).returncode
+    if a.cmd == 'trim': return run('sres_trim.py', a.src, a.dst).returncode
+    if a.cmd == 'write': return subprocess.run(['bash', os.path.join(HERE, 'write_part.sh'), a.part, a.file]).returncode
     if a.cmd == 'dump': return subprocess.run(['bash', os.path.join(HERE, 'dump_phone.sh'), a.mode]).returncode   # shell script, not Python
     return 0
 

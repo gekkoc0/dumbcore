@@ -1,0 +1,2 @@
+Pillow      # images: export, editing, mock-up
+capstone    # optional: disassembly helpers (nvhints, nvxref, armre)

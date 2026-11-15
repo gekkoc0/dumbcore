@@ -1,0 +1,13 @@
+# firmware, backups and generated files - never in the repository
+backup/
+fw/
+work/
+mockup/
+*.pac
+*.bin
+*.img
+*.tar.gz
+__pycache__/
+*.pyc
+.venv/
+.DS_Store

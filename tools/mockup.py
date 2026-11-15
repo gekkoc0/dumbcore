@@ -137,14 +137,30 @@ def main(argv):
     data['statusbar'] = named('IMAGE_IDLE_STATUS_BAR')
     data['mid_softkey'] = named('IMAGE_IDLE_MIDDLE_SOFTKEY_ICON')
     data['selected_bar'] = named('IMAGE_COMMON_SELECTED_BAR')
-    # --- strings (module 0 indexes found with sresedit.py --find)
-    keys = dict(menu=13, back=17, select=15, contacts=4, no_service=8, options=24, equal=26, clear=3616, empty=3069,
-                no_record=2918, turn_on=3655, turn_off=3656, today=198, alarm_empty=3653, calendar=3627,
-                calculator=3682, torch=2970, recorder=2912, profiles=3617, display=2907, call_set=2908,
-                phone_set=3681, security=3526, connectivity=3691, extras=3644)
-    lists = dict(wdays=(226, 7), months=(3719, 12))     # Sun..Sat short names, January..December
+    # --- strings. Text numbers differ between builds, so each one is found by its English text in module 0, taking the
+    # match closest to its number in 11.00 HK (where they were found with sresedit.py --find); day/month names as a run.
+    keys = dict(menu=(13, 'Menu'), back=(17, 'Back'), select=(15, 'Select'), contacts=(4, 'Contacts'),
+                no_service=(8, 'No service'), options=(24, 'Options'), equal=(26, 'Equal'), clear=(3616, 'Clear'),
+                empty=(3069, '<Empty List>'), no_record=(2918, 'No record'), turn_on=(3655, 'Turn on'),
+                turn_off=(3656, 'Turn off'), today=(198, 'Today'),
+                alarm_empty=(3653, 'Your alarms will show up here.Create one now.'), calendar=(3627, 'Calendar'),
+                calculator=(3682, 'Calculator'), torch=(2970, 'Torch'), recorder=(2912, 'Recorder'),
+                profiles=(3617, 'Profiles'), display=(2907, 'Display'), call_set=(2908, 'Call settings'),
+                phone_set=(3681, 'Phone settings'), security=(3526, 'Security'), connectivity=(3691, 'Connectivity'),
+                extras=(3644, 'Extras'))
+    EN = 0
+    english = [s.string_at(o) for o in s.texts(M[0])[EN]]
+    def find(old, text):
+        hits = [i for i, t in enumerate(english) if t == text]
+        return min(hits, key=lambda i: abs(i - old)) if hits else old
+    def find_run(first, second, old):
+        hits = [i for i in range(len(english) - 2) if english[i] == first and english[i + 1] == second]
+        return min(hits, key=lambda i: abs(i - old)) if hits else old
+    idx = {k: find(o, t) for k, (o, t) in keys.items()}
+    lists = dict(wdays=(find_run('Sun', 'Mon', 226), 7), months=(find_run('January', 'Febrary', 3719)
+                 if 'Febrary' in english else find_run('January', 'February', 3719), 12))
     def strings(L):
-        d = {k: text_ix(0, i, L) for k, i in keys.items()}
+        d = {k: text_ix(0, i, L) for k, i in idx.items()}
         d.update({k: [text_ix(0, a + j, L) for j in range(n)] for k, (a, n) in lists.items()})
         return d
     data['str'] = {'ru': strings(None), 'en': strings(0)}
@@ -164,6 +180,8 @@ def main(argv):
     open(os.path.join(out, 'data.js'), 'w').write('window.PHONE = ' + json.dumps(data, ensure_ascii=False, indent=1) + ';\n')
     import shutil
     shutil.copy(os.path.join(HERE, 'mockup_template.html'), os.path.join(out, 'index.html'))   # always the current template
+    for f in ('mockup_phone.css', 'mockup_phone.js'):                                          # общий «телефон» (использует и студия)
+        shutil.copy2(os.path.join(HERE, f), os.path.join(out, f))
     print(f'{out}: {len(items)} menu items ({len(data["menu"]["grid"])} in the grid), {len(os.listdir(adir))} assets, '
           f'language {data["lang"]}; open {os.path.join(out, "index.html")}')
 

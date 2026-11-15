@@ -1,0 +1,411 @@
+const P = window.PHONE, scr = document.getElementById('scr');
+const st = { wp: 0, style: 'grid', lang: 'ru', mset: 'nv', stack: [], edit: false };
+const hidden = new Set();
+const T = k => P.str[st.lang][k];
+const RU = () => st.lang === 'ru';
+const byCode = Object.fromEntries(P.menu.items.map(i => [i.code, i]));
+const menuItems = () => {
+  const codes = st.mset === 'nv' ? (st.style === 'grid' ? P.menu.grid : (P.menu.list.length ? P.menu.list : P.menu.grid)) :
+    P.menu.items.map(i => i.code);
+  const items = codes.map(c => byCode[c]).filter(Boolean);
+  return st.edit ? items : items.filter(it => !hidden.has(it.code));
+};
+const label = it => RU() ? it.ru : it.en;
+const el = (tag, cls, css, html) => { const e = document.createElement(tag); if (cls) e.className = cls; if (css) Object.assign(e.style, css); if (html != null) e.innerHTML = html; return e; };
+const img = (src, css) => { const i = el('img', 'abs', css); i.src = src; return i; };
+const esc = s => String(s).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+const curWin = () => st.stack[st.stack.length - 1];
+const open = w => { st.stack.push(w); if (w.init) w.init(); render(); };
+const close = () => { const w = st.stack.pop(); if (w && w.exit) w.exit(); if (!st.stack.length) st.stack.push(Idle()); render(); };
+const home = () => { while (st.stack.length > 1) { const w = st.stack.pop(); if (w.exit) w.exit(); } render(); };
+
+// ---------- shared pieces ----------
+function clock12(d = new Date()) { const h = d.getHours() % 12 || 12; return [`${h}:${String(d.getMinutes()).padStart(2, '0')}`, d.getHours() < 12 ? 'am' : 'pm']; }
+function statusBar() {                           // SIM 1/2 signal dots on the left, battery and time on the right
+  const b = el('div', 'abs status');
+  if (P.ui) b.append(img(P.ui.st_signal, { left: '3px', top: '6px' }));
+  const r = el('div', 'abs', { right: '4px', top: '4px', display: 'flex', alignItems: 'center', gap: '4px', fontSize: '13px', fontWeight: 600 });
+  if (P.ui) { const bt = document.createElement('img'); bt.src = P.ui.st_battery; r.append(bt); }
+  const [t, ap] = clock12(); r.append(el('span', '', null, t + ap));
+  b.append(r);
+  return b;
+}
+const SK_ICON = { opt: 'sk_options', back: 'sk_back', close: 'sk_close', torch: 'idle_torch', camera: 'idle_camera' };
+function softkeys(l, m, r) {                     // l / r: text or an icon key (opt, back, close, torch, camera)
+  const s = el('div', 'abs softkeys');
+  const part = (v, cls) => {
+    const d = el('div', cls);
+    if (v && SK_ICON[v] && P.ui) { const i = document.createElement('img'); i.src = P.ui[SK_ICON[v]]; d.append(i); }
+    else d.textContent = v || '';
+    return d;
+  };
+  s.append(part(m, 'm'), part(l, 'l'), part(r, 'r'));
+  return s;
+}
+function frame(title) {                          // firmware windows: black background, status bar, plain centred title
+  scr.append(el('div', 'abs', { inset: 0, background: '#000' }), statusBar());
+  if (title != null) scr.append(el('div', 'abs title', null, esc(title)));
+}
+function text(s, css) { scr.append(el('div', 'abs center', Object.assign({ fontSize: '15px' }, css), esc(s))); }
+
+// a vertical list window: rows = [{text, icon, open()}]
+// a vertical list window like the firmware draws: 40 px rows from y=54, selected row solid red, full width
+function List(title, rows, empty, keys) {
+  return {
+    sel: 0, topRow: 0,
+    draw() {
+      frame(typeof title === 'function' ? title() : title);
+      const rs = rows(), vis = 6;
+      if (!rs.length) { text(empty ? T(empty) : T('empty'), { top: '130px', color: '#838183' }); scr.append(softkeys('', '', 'back')); return; }
+      if (this.sel < this.topRow) this.topRow = this.sel;
+      if (this.sel >= this.topRow + vis - 1 && this.sel < rs.length - 1) this.topRow = this.sel - vis + 2;
+      rs.slice(this.topRow, this.topRow + vis).forEach((r, j) => {
+        const i = this.topRow + j, row = el('div', 'abs row' + (i === this.sel ? ' sel' : ''), { top: 54 + j * 40 + 'px' });
+        if (r.icon) { const ic = document.createElement('img'); ic.src = r.icon; ic.style.cssText = 'width:24px;height:24px;object-fit:contain;flex:none'; row.append(ic); }
+        row.append(el('span', '', null, esc(r.text)));
+        if (r.radio != null) row.append(el('span', 'radio' + (r.radio ? ' on' : '')));
+        if (r.toggle != null) row.append(el('span', 'toggle' + (r.toggle ? ' on' : '')));
+        scr.append(row);
+      });
+      scr.append(softkeys(keys ? keys.l : '', keys ? keys.m : T('select'), keys ? keys.r : 'back'));
+    },
+    key(k) {
+      const rs = rows(), n = rs.length;
+      if (k === 'R') return close();
+      if (!n) return;
+      if (k === 'DOWN') this.sel = (this.sel + 1) % n;
+      else if (k === 'UP') this.sel = (this.sel - 1 + n) % n;
+      else if (k === 'OK') rs[this.sel].open ? rs[this.sel].open() : open(Stub(rs[this.sel].text));
+    },
+  };
+}
+// placeholder for windows whose content we have not taken apart yet
+function Stub(title, icon) {
+  return {
+    draw() {
+      frame(title);
+      if (icon) scr.append(img(icon, { left: '82px', top: '70px', width: '76px', height: '76px', objectFit: 'none' }));
+      text(RU() ? 'Это окно в телефоне рисует код приложения. В макете — заглушка: содержимое появится, когда разберём его в эмуляторе.'
+                : 'On the phone this window is drawn by the app code. Placeholder for now.', { top: '160px', fontSize: '13px', color: '#838183' });
+      scr.append(softkeys('', '', 'back'));
+    },
+    key(k) { if (k === 'R') close(); },
+  };
+}
+
+// ---------- idle screen and dialer ----------
+function Idle() {                                // layout of the firmware's idle screen (emulator frame), over the wallpaper
+  return {
+    draw() {
+      scr.append(img(P.wallpapers[st.wp], { left: 0, top: 0, width: '240px', height: '320px' }), statusBar());
+      const sh = { textShadow: '0 1px 3px rgba(0,0,0,.8)' }, d = new Date(), [t, ap] = clock12(d);
+      const ck = el('div', 'abs', Object.assign({ left: 0, width: '240px', top: '34px', display: 'flex', justifyContent: 'center',
+        alignItems: 'baseline', gap: '6px' }, sh));
+      ck.append(el('span', '', { fontSize: '46px', fontWeight: 300, letterSpacing: '.02em' }, t), el('span', '', { fontSize: '15px' }, ap));
+      scr.append(ck);
+      const wd = d.toLocaleDateString(RU() ? 'ru-RU' : 'en-GB', { weekday: 'long' });
+      const dd = `${String(d.getDate()).padStart(2, '0')}.${String(d.getMonth() + 1).padStart(2, '0')}.${d.getFullYear()}`;
+      text(`${wd[0].toUpperCase() + wd.slice(1)},  ${dd}`, Object.assign({ top: '90px', fontSize: '16px' }, sh));
+      [1, 2].forEach((n, i) => {
+        if (P.ui) scr.append(img(P.ui['sim' + n], { left: '14px', top: 126 + i * 23 + 'px' }));
+        scr.append(el('div', 'abs', Object.assign({ left: '36px', top: 121 + i * 23 + 'px', fontSize: '16px' }, sh), esc(T('no_service'))));
+      });
+      scr.append(softkeys('torch', T('menu'), 'camera'));
+    },
+    key(k) {
+      if (k === 'OK') open(Menu());
+      else if (k === 'L') openApp(byCode[0x23]);
+      else if (k === 'R') openApp(byCode[6]);
+      else if (k === 'DOWN') openApp(byCode[2]);
+      else if (k === 'CALL') openApp(byCode[1]);
+      else if (/^[0-9*#]$/.test(k)) open(Dial(k));
+    },
+  };
+}
+function Dial(first) {
+  return {
+    s: first, calling: false,
+    draw() {
+      frame(null);
+      if (this.calling) {
+        text(RU() ? 'Вызов' : 'Calling', { top: '80px', color: '#838183' });
+        text(this.s, { top: '110px', fontSize: '26px' });
+        text(T('no_service'), { top: '160px', color: '#ee1020' });
+        scr.append(softkeys('', '', RU() ? 'Отбой' : 'End'));
+        return;
+      }
+      scr.append(el('div', 'abs', { left: '8px', right: '8px', top: '150px', textAlign: 'right', fontSize: this.s.length > 10 ? '26px' : '36px',
+        wordBreak: 'break-all', fontWeight: 300 }, esc(this.s)));
+      scr.append(softkeys('opt', '', T('clear')));
+    },
+    key(k) {
+      if (this.calling) { if (k === 'END' || k === 'R') close(); return; }
+      if (/^[0-9*#]$/.test(k)) this.s = (this.s + k).slice(0, 24);
+      else if (k === 'R') { this.s = this.s.slice(0, -1); if (!this.s) close(); }
+      else if (k === 'CALL' || k === 'OK') this.calling = true;
+    },
+  };
+}
+
+// ---------- main menu ----------
+function Menu() {                                // grid as drawn by the firmware: 76 px cells, 3 columns, 4th row peeks under the soft keys
+  const COLS = [3, 82, 161], ROWS = [49, 124, 200, 275];
+  return {
+    sel: Math.min(4, menuItems().length - 1), topRow: 0,          // the firmware opens the menu on the centre item
+    draw() {
+      const items = menuItems(), it = items[this.sel];
+      frame(null);
+      scr.append(el('div', 'abs title', { top: '25px' }, it ? esc(label(it)) : ''));
+      if (st.style === 'grid') {
+        if (this.sel < this.topRow * 3) this.topRow = Math.floor(this.sel / 3);
+        if (this.sel >= (this.topRow + 3) * 3) this.topRow = Math.floor(this.sel / 3) - 2;
+        items.forEach((x, i) => {
+          const r = Math.floor(i / 3) - this.topRow, c = i % 3;
+          if (r < 0 || r > 3) return;
+          const left = COLS[c] + 'px', topp = ROWS[r] + 'px', hid = hidden.has(x.code);
+          if (x.icon) { const ic = img(x.icon, { left, top: topp, width: '76px', height: '76px', objectFit: 'none' }); if (hid) ic.style.opacity = .3; scr.append(ic); }
+          if (i === this.sel && P.menu_frame) scr.append(img(P.menu_frame, { left, top: topp }));
+          if (st.edit) {
+            const b = el('div', 'abs', { left: (COLS[c] + 52) + 'px', top: topp, width: '24px', height: '24px', lineHeight: '24px',
+              textAlign: 'center', fontSize: '16px', background: 'rgba(0,0,0,.7)', borderRadius: '50%', cursor: 'pointer', zIndex: 6,
+              color: hid ? '#8f8' : '#f88' }, hid ? '↺' : '✕');
+            b.title = hid ? 'Показать' : 'Скрыть';
+            b.onclick = ev => { ev.stopPropagation(); if (hid) hidden.delete(x.code); else hidden.add(x.code); render(); };
+            scr.append(b);
+          }
+        });
+      } else if (it) {
+        if (P.list_bg) scr.append(img(P.list_bg, { left: 0, top: '54px' }));
+        scr.append(img(it.big || it.icon, { left: '40px', top: '64px', width: '160px', height: '160px', objectFit: 'none' }));
+        text(`${this.sel + 1} / ${items.length}`, { top: '244px', fontSize: '13px', color: '#838183' });
+      }
+      scr.append(softkeys('opt', T('select'), 'back'));
+    },
+    key(k) {
+      const items = menuItems(), n = items.length, step = st.style === 'grid' ? 3 : 1;
+      if (k === 'R') close();
+      else if (k === 'RIGHT') this.sel = (this.sel + 1) % n;
+      else if (k === 'LEFT') this.sel = (this.sel - 1 + n) % n;
+      else if (k === 'DOWN') this.sel = Math.min(n - 1, this.sel + step);
+      else if (k === 'UP') this.sel = Math.max(0, this.sel - step);
+      else if (k === 'OK' || k === 'L') openApp(items[this.sel]);
+      else if (/^[1-9]$/.test(k) && st.style === 'grid') { const i = this.topRow * 3 + (+k - 1); if (i < n) this.sel = i; }
+    },
+  };
+}
+
+// ---------- the simple apps ----------
+const APPS = {
+  0x01: () => List(() => label(byCode[1]), () => [], 'no_record'),
+  0x02: () => List(() => label(byCode[2]), () => [], 'empty'),
+  0x05: () => List(() => label(byCode[5]), () => [], 'empty'),
+  0x09: () => ({ draw() { frame(label(byCode[9])); text(T('alarm_empty'), { top: '120px', color: '#838183' }); scr.append(softkeys('', '', 'back')); },
+                 key(k) { if (k === 'R') close(); } }),
+  0x0c: () => List(() => label(byCode[0x0c]), () => [['profiles', 'set_profiles'], ['display', 'set_display'], ['call_set', 'set_call'],
+    ['phone_set', 'set_phone'], ['security', 'set_security'], ['connectivity', 'set_link']].map(([t, i]) => ({ text: T(t), icon: P.img[i] }))),
+  0x0e: () => List(() => label(byCode[0x0e]), () => [0x20, 0x21, 0x22, 0x23, 0x24].filter(c => byCode[c])
+    .map(c => ({ text: label(byCode[c]), icon: byCode[c].icon, open: () => openApp(byCode[c]) }))),
+  0x20: Calendar, 0x21: Calculator, 0x22: Recorder, 0x23: Torch, 0x1d: Snake,
+};
+function openApp(it) { if (it) open(APPS[it.code] ? APPS[it.code]() : Stub(label(it), it.icon)); }
+
+function Calendar() {
+  return {
+    d: new Date(),
+    draw() {
+      const d = this.d, y = d.getFullYear(), m = d.getMonth(), today = new Date();
+      frame(`${T('months')[m]} ${y}`);
+      const wd = T('wdays'), order = [1, 2, 3, 4, 5, 6, 0];          // week starts on Monday
+      order.forEach((w, c) => scr.append(el('div', 'abs', { left: 8 + c * 32 + 'px', top: '60px', width: '32px', textAlign: 'center', fontSize: '12px',
+        color: w === 0 || w === 6 ? '#ff8a7a' : '#838183' }, esc(wd[w]))));
+      const first = (new Date(y, m, 1).getDay() + 6) % 7, days = new Date(y, m + 1, 0).getDate();
+      for (let i = 1; i <= days; i++) {
+        const cell = first + i - 1, c = cell % 7, r = Math.floor(cell / 7);
+        const isSel = i === d.getDate(), isToday = i === today.getDate() && m === today.getMonth() && y === today.getFullYear();
+        scr.append(el('div', 'abs', { left: 9 + c * 32 + 'px', top: 82 + r * 32 + 'px', width: '30px', height: '28px', lineHeight: '28px',
+          textAlign: 'center', fontSize: '14px', borderRadius: '6px', background: isSel ? '#ee1020' : 'none',
+          border: isToday && !isSel ? '1px solid #ee1020' : 'none', color: isSel ? '#fff' : (c >= 5 ? '#ff8a7a' : '#fff') }, i));
+      }
+      scr.append(softkeys('', T('today'), 'back'));
+    },
+    key(k) {
+      const mv = { LEFT: -1, RIGHT: 1, UP: -7, DOWN: 7 }[k];
+      if (mv) this.d = new Date(this.d.getFullYear(), this.d.getMonth(), this.d.getDate() + mv);
+      else if (k === 'OK') this.d = new Date();
+      else if (k === 'R') close();
+    },
+  };
+}
+
+function Calculator() {
+  const OPS = { UP: '+', DOWN: '−', LEFT: '×', RIGHT: '÷' };
+  return {
+    acc: null, op: null, cur: '0', fresh: true,
+    calc(a, b, op) { return op === '+' ? a + b : op === '−' ? a - b : op === '×' ? a * b : b === 0 ? NaN : a / b; },
+    fmt(v) { if (!isFinite(v)) return RU() ? 'Ошибка' : 'Error'; return String(+v.toPrecision(10)).replace('.', ','); },
+    draw() {
+      frame(T('calculator'));
+      scr.append(el('div', 'abs', { left: '10px', right: '10px', top: '62px', height: '28px', textAlign: 'right', fontSize: '15px', color: '#838183' },
+        this.acc != null ? esc(this.fmt(this.acc) + ' ' + (this.op || '')) : ''));
+      scr.append(el('div', 'abs', { left: '10px', right: '10px', top: '90px', textAlign: 'right', fontSize: this.cur.length > 11 ? '24px' : '34px', fontWeight: 300 },
+        esc(this.cur.replace('.', ','))));
+      // the operator cross on the joystick
+      const cx = 120, cy = 200, pos = { UP: [0, -38], DOWN: [0, 38], LEFT: [-48, 0], RIGHT: [48, 0] };
+      for (const [k, [dx, dy]] of Object.entries(pos)) {
+        const on = this.op === OPS[k] && this.fresh;
+        scr.append(el('div', 'abs', { left: cx + dx - 17 + 'px', top: cy + dy - 17 + 'px', width: '34px', height: '34px', borderRadius: '50%',
+          lineHeight: '34px', textAlign: 'center', fontSize: '20px', background: on ? '#ee1020' : 'rgba(255,255,255,.12)', color: on ? '#fff' : '#fff' }, OPS[k]));
+      }
+      scr.append(el('div', 'abs', { left: cx - 17 + 'px', top: cy - 17 + 'px', width: '34px', height: '34px', borderRadius: '50%', lineHeight: '34px',
+        textAlign: 'center', fontSize: '20px', background: 'rgba(255,255,255,.25)' }, '='));
+      text(RU() ? '# или * — запятая' : '# or * — decimal point', { top: '262px', fontSize: '11px', color: '#838183' });
+      scr.append(softkeys('', T('equal'), this.cur !== '0' || this.acc != null ? T('clear') : 'back'));
+    },
+    key(k) {
+      if (/^[0-9]$/.test(k)) { this.cur = this.fresh || this.cur === '0' ? k : (this.cur + k).slice(0, 14); this.fresh = false; }
+      else if (k === '*' || k === '#') { if (this.fresh) { this.cur = '0.'; this.fresh = false; } else if (!this.cur.includes('.')) this.cur += '.'; }
+      else if (OPS[k]) {
+        if (this.acc != null && this.op && !this.fresh) this.acc = this.calc(this.acc, +this.cur, this.op); else if (this.acc == null || !this.op) this.acc = +this.cur;
+        this.op = OPS[k]; this.fresh = true;
+      } else if (k === 'OK' || k === 'L') {
+        if (this.acc != null && this.op) { const v = this.calc(this.acc, +this.cur, this.op); this.cur = isFinite(v) ? String(+v.toPrecision(10)) : this.fmt(v); this.acc = null; this.op = null; this.fresh = true; }
+      } else if (k === 'R') {
+        if (!this.fresh && this.cur.length > 1) this.cur = this.cur.slice(0, -1);
+        else if (this.cur !== '0' || this.acc != null) { this.cur = '0'; this.acc = null; this.op = null; this.fresh = true; }
+        else close();
+      }
+    },
+  };
+}
+
+function Torch() {
+  return {
+    on: false,
+    draw() {
+      if (this.on) {
+        scr.append(el('div', 'abs', { inset: 0, background: 'radial-gradient(circle at 50% 45%, #fff 0, #fffbe6 35%, #f2e6b8 70%, #d8c98f)' }));
+        scr.append(statusBar());
+        scr.append(img(P.img.torch, { left: '96px', top: '120px' }));
+      } else {
+        frame(T('torch'));
+        scr.append(img(P.img.torch, { left: '96px', top: '110px', opacity: .55 }));
+      }
+      scr.append(softkeys('', this.on ? T('turn_off') : T('turn_on'), 'back'));
+      document.getElementById('phone').classList.toggle('lit', this.on);
+    },
+    key(k) { if (k === 'OK' || k === 'L') this.on = !this.on; else if (k === 'R') close(); },
+    exit() { document.getElementById('phone').classList.remove('lit'); },
+  };
+}
+
+function Recorder() {
+  return {
+    t: 0, timer: null,
+    draw() {
+      frame(T('recorder'));
+      const mm = String(Math.floor(this.t / 60)).padStart(2, '0'), ss = String(this.t % 60).padStart(2, '0');
+      scr.append(el('div', 'abs', { left: '95px', top: '92px', width: '50px', height: '50px', borderRadius: '50%',
+        background: this.timer ? '#e5463a' : 'rgba(255,255,255,.18)', boxShadow: this.timer ? '0 0 0 8px rgba(229,70,58,.25)' : 'none' }));
+      text(`${mm}:${ss}`, { top: '160px', fontSize: '34px', fontWeight: 300 });
+      text(this.timer ? (RU() ? 'Запись… (звук не пишется — это макет)' : 'Recording… (mock-up, no sound)') : (RU() ? 'Центр — начать' : 'Centre key — start'),
+        { top: '210px', fontSize: '12px', color: '#838183' });
+      scr.append(softkeys('', this.timer ? (RU() ? 'Стоп' : 'Stop') : (RU() ? 'Запись' : 'Record'), 'back'));
+    },
+    key(k) {
+      if (k === 'OK') { if (this.timer) { clearInterval(this.timer); this.timer = null; } else { this.t = 0; this.timer = setInterval(() => { this.t++; if (curWin() === this) render(); }, 1000); } }
+      else if (k === 'R') close();
+    },
+    exit() { clearInterval(this.timer); },
+  };
+}
+
+// a plain, generic snake: our own drawing, only the menu label comes from the firmware
+function Snake() {
+  const W = 19, H = 19, C = 12, X0 = 6, Y0 = 56;
+  return {
+    init() { this.body = [[9, 9], [8, 9], [7, 9]]; this.dir = [1, 0]; this.next = [1, 0]; this.food = this.spot(); this.score = 0; this.over = false;
+             this.timer = setInterval(() => this.step(), 160); },
+    spot() { let p; do p = [Math.floor(Math.random() * W), Math.floor(Math.random() * H)]; while (this.body.some(b => b[0] === p[0] && b[1] === p[1])); return p; },
+    step() {
+      if (this.over || curWin() !== this) return;
+      this.dir = this.next;
+      const h = [this.body[0][0] + this.dir[0], this.body[0][1] + this.dir[1]];
+      if (h[0] < 0 || h[1] < 0 || h[0] >= W || h[1] >= H || this.body.some(b => b[0] === h[0] && b[1] === h[1])) { this.over = true; render(); return; }
+      this.body.unshift(h);
+      if (h[0] === this.food[0] && h[1] === this.food[1]) { this.score++; this.food = this.spot(); } else this.body.pop();
+      render();
+    },
+    draw() {
+      scr.append(el('div', 'abs', { inset: 0, background: '#1c2a12' }), statusBar());
+      scr.append(el('div', 'abs', { left: '8px', top: '30px', fontSize: '14px', color: '#cfe8a8' }, `${label(byCode[0x1d])}: ${this.score}`));
+      scr.append(el('div', 'abs', { left: X0 - 2 + 'px', top: Y0 - 2 + 'px', width: W * C + 4 + 'px', height: H * C + 4 + 'px', border: '2px solid #8fb35a', borderRadius: '3px' }));
+      const cell = ([x, y], col) => scr.append(el('div', 'abs', { left: X0 + x * C + 1 + 'px', top: Y0 + y * C + 1 + 'px', width: C - 2 + 'px', height: C - 2 + 'px', background: col, borderRadius: '2px' }));
+      cell(this.food, '#ffcc4d'); this.body.forEach((b, i) => cell(b, i ? '#b5dd73' : '#e4ffb5'));
+      if (this.over) {
+        scr.append(el('div', 'abs', { left: '30px', right: '30px', top: '120px', padding: '14px', background: 'rgba(0,0,0,.75)', borderRadius: '8px',
+          textAlign: 'center', fontSize: '16px' }, esc(RU() ? `Игра окончена\nСчёт: ${this.score}` : `Game over\nScore: ${this.score}`).replace('\n', '<br>')));
+        scr.append(softkeys('', RU() ? 'Заново' : 'Again', 'back'));
+      } else scr.append(softkeys('', '', 'back'));
+    },
+    key(k) {
+      const d = { UP: [0, -1], '2': [0, -1], DOWN: [0, 1], '8': [0, 1], LEFT: [-1, 0], '4': [-1, 0], RIGHT: [1, 0], '6': [1, 0] }[k];
+      if (d && !(d[0] === -this.dir[0] && d[1] === -this.dir[1])) this.next = d;
+      else if (k === 'OK' && this.over) { clearInterval(this.timer); this.init(); }
+      else if (k === 'R') close();
+    },
+    exit() { clearInterval(this.timer); },
+  };
+}
+
+// ---------- drawing and input ----------
+function render() { scr.innerHTML = ''; curWin().draw(); }
+document.getElementById('btnEdit').onclick = () => { st.edit = !st.edit; document.getElementById('btnEdit').textContent = st.edit ? '✓ Готово' : '✎ Скрыть пункты'; render(); };
+document.getElementById('btnReset').onclick = () => { hidden.clear(); render(); };
+document.getElementById('btnExport').onclick = () => {
+  const grid = P.menu.grid.filter(c => !hidden.has(c));
+  const list = (P.menu.list.length ? P.menu.list : P.menu.grid).filter(c => !hidden.has(c));
+  const out = { note: 'Скрытые пункты меню (коды) и новый порядок. Коды: 01 Журнал … 24 Счётчики (docs/nv-map.md).', hidden: [...hidden].sort((a, b) => a - b), grid, list };
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([JSON.stringify(out, null, 2)], { type: 'application/json' }));
+  a.download = 'menu_edits.json';
+  a.click();
+};
+function press(k) {
+  if (k === 'END' && st.stack.length > 1) return home();
+  curWin().key(k); render();
+}
+const KEYS = [['1', 'ꝏ'], ['2', 'abc'], ['3', 'def'], ['4', 'ghi'], ['5', 'jkl'], ['6', 'mno'], ['7', 'pqrs'], ['8', 'tuv'], ['9', 'wxyz'],
+  ['*', '+'], ['0', '␣'], ['#', '⇧']];
+const kb = document.getElementById('keys');
+KEYS.forEach(([d, sub], i) => {
+  const c = i % 3, r = Math.floor(i / 3);
+  const b = el('div', 'k c' + c, { top: 810 + r * 63 + 'px' }, c === 2 ? `<i>${sub}</i><b>${d}</b>` : `<b>${d}</b><i>${sub}</i>`);
+  b.dataset.k = d; kb.append(b);
+});
+document.getElementById('phone').addEventListener('click', e => { const t = e.target.closest('[data-k]'); if (t) press(t.dataset.k); });
+const KMAP = { ArrowUp: 'UP', ArrowDown: 'DOWN', ArrowLeft: 'LEFT', ArrowRight: 'RIGHT', Enter: 'OK', '[': 'L', ']': 'R', '\\': 'CALL', Escape: 'END', Backspace: 'R' };
+document.addEventListener('keydown', e => {
+  const k = KMAP[e.key] || (/^[0-9*#]$/.test(e.key) ? e.key : null);
+  if (!k || e.target.tagName === 'SELECT' || e.metaKey || e.ctrlKey) return;
+  e.preventDefault(); press(k);
+  const b = document.querySelector(`#phone [data-k="${CSS.escape(k)}"]`);
+  if (b) { b.classList.add('down'); setTimeout(() => b.classList.remove('down'), 120); }
+});
+// side panel
+document.getElementById('src').textContent = P.source;
+const wp = document.getElementById('wp');
+P.wallpapers.forEach((w, i) => wp.append(new Option('Встроенные ' + (i + 1), i)));
+wp.onchange = () => { st.wp = +wp.value; render(); };
+const bind = (id, key) => { const s = document.getElementById(id); s.onchange = () => { st[key] = s.value; home(); }; };
+bind('ms', 'style'); bind('lang', 'lang'); bind('mset', 'mset');
+// scale the whole phone to the window
+function fit() {
+  const narrow = window.innerWidth <= 820;
+  const k = Math.min((window.innerHeight - 32) / 1100, (window.innerWidth - (narrow ? 32 : 380)) / 470, 1.2);
+  document.getElementById('phone').style.transform = `scale(${k})`;
+  const s = document.getElementById('stage'); s.style.width = 470 * k + 'px'; s.style.height = 1100 * k + 'px';
+}
+window.addEventListener('resize', fit); fit();
+[...P.menu.items.flatMap(x => [x.icon, x.big]), P.menu_frame, ...P.wallpapers, ...Object.values(P.img || {})].filter(Boolean).forEach(u => { new Image().src = u; });
+setInterval(() => { if (curWin().draw && st.stack.length === 1) render(); }, 30000);
+st.stack.push(Idle()); render();

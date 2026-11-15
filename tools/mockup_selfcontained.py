@@ -16,6 +16,14 @@ def main():
     # 1) встроить data.js прямо в HTML (убираем зависимость от внешнего скрипта)
     html = html.replace('<script src="data.js"></script>', '<script>\n' + js + '\n</script>')
 
+    # 1b) встроить общий CSS телефона
+    css = open(os.path.join(out, 'mockup_phone.css')).read()
+    html = html.replace('<link rel="stylesheet" href="mockup_phone.css">', '<style>\n' + css + '\n</style>')
+
+    # 1c) встроить общий JS телефона
+    pjs = open(os.path.join(out, 'mockup_phone.js')).read()
+    html = html.replace('<script src="mockup_phone.js"></script>', '<script>\n' + pjs + '\n</script>')
+
     # 2) встроить картинки assets/* как data URL (base64) — и в src="…", и в JS-строках "assets/…"
     def repl(m):
         path = m.group(0)

@@ -70,6 +70,18 @@ def main():
     p = s.add_parser('images', help='выгрузить все картинки ресурсов (export_images.py)')
     p.add_argument('mmi_res'); p.add_argument('outdir')
 
+    p = s.add_parser('menu-write', help='[не проверено на телефоне] меню (NV 680) в заводском NV: из JSON макета или кодами')
+    p.add_argument('nvitem_src'); p.add_argument('nvitem_dst')
+    p.add_argument('--json', help='menu_edits.json из макета (⤓ Экспорт)')
+    p.add_argument('--grid', help='коды сетки через запятую, hex'); p.add_argument('--list', help='коды списка через запятую, hex')
+
+    p = s.add_parser('mod', help='собрать изменённые ресурсы (и .pac) из бэкапа и правок (mod.py)')
+    p.add_argument('--res', required=True); p.add_argument('--res-out', required=True)
+    p.add_argument('--pac'); p.add_argument('--nv'); p.add_argument('--out')
+    p.add_argument('--hide-menu'); p.add_argument('--font')
+    p.add_argument('--icon', action='append', default=[]); p.add_argument('--color', action='append', default=[])
+    p.add_argument('--text', action='append', default=[]); p.add_argument('--verify', action='store_true')
+
     p = s.add_parser('trim', help='обрезать ресурсы из бэкапа до реальных данных (sres_trim.py)')
     p.add_argument('src'); p.add_argument('dst')
 
@@ -90,6 +102,20 @@ def main():
     if a.cmd == 'pac': return run('pacwrite.py', a.src, a.dst, *a.replace).returncode
     if a.cmd == 'mockup': return run('mockup.py', *[x for x in (a.mmi_res, a.nvitem, a.user, a.out) if x]).returncode
     if a.cmd == 'images': return run('export_images.py', a.mmi_res, a.outdir).returncode
+    if a.cmd == 'menu-write':
+        args = [a.nvitem_src, a.nvitem_dst]
+        args += [a.json] if a.json else ['--grid', a.grid, '--list', a.list]
+        return run('nvmenu_write.py', *args).returncode
+    if a.cmd == 'mod':
+        args = ['--res', a.res, '--res-out', a.res_out]
+        for opt in ('pac', 'nv', 'out', 'hide_menu', 'font'):
+            if getattr(a, opt):
+                args += ['--' + opt.replace('_', '-'), getattr(a, opt)]
+        for x in a.icon: args += ['--icon', x]
+        for x in a.color: args += ['--color', x]
+        for x in a.text: args += ['--text', x]
+        if a.verify: args += ['--verify']
+        return run('mod.py', *args).returncode
     if a.cmd == 'trim': return run('sres_trim.py', a.src, a.dst).returncode
     if a.cmd == 'write': return subprocess.run(['bash', os.path.join(HERE, 'write_part.sh'), a.part, a.file]).returncode
     if a.cmd == 'dump': return subprocess.run(['bash', os.path.join(HERE, 'dump_phone.sh'), a.mode]).returncode   # shell script, not Python

@@ -2,7 +2,7 @@
 """Rebuild a Spreadtrum/Unisoc .pac (BP_R1.0.0) with some partition files replaced. Local files only.
 
     pacwrite.py <in.pac> <out.pac> [PARTITION_ID=file ...]      e.g. MMIRes=mmi_res_new.bin
-    pacwrite.py <in.pac> --verify                                check the two checksums of a .pac
+    pacwrite.py <in.pac> --verify                                check the header, layout and checksums
 
 Layout (measured on all 8 firmware files, every one rebuilds byte for byte without changes):
   0x000 PAC_HEADER (0x84c bytes): version 'BP_R1.0.0' (UTF-16, 24 chars), +0x30 u32 total file size,
@@ -15,6 +15,8 @@ Layout (measured on all 8 firmware files, every one rebuilds byte for byte witho
 Signed images (FDL, BOOT, KERNEL, USER) must not be replaced: their DHTB signatures would fail (docs/secureboot.md).
 """
 import struct, sys, os
+from pathlib import Path
+from tempfile import mkstemp
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 HDR, ENT = 0x84c, 0xa14
@@ -46,17 +48,49 @@ def wstr(b):
     return b.decode('utf-16le', 'replace').split('\x00', 1)[0]
 
 
-def read(path):
-    d = open(path, 'rb').read()
+def partition_records(d):
+    """Return (table entry, payload offset, payload size) views from a checked layout."""
+    if len(d) < HDR:
+        raise ValueError('truncated PAC header')
     count, start = struct.unpack_from('<II', d, 0x434)
-    assert start == HDR, 'unexpected .pac header size'
-    ents = []
+    if start != HDR:
+        raise ValueError('unexpected PAC partition table offset')
+    table_end = start + ENT * count
+    if table_end > len(d):
+        raise ValueError('PAC partition table extends beyond end of file')
+
+    data = memoryview(d)
+    records = []
+    occupied = []
     for i in range(count):
-        e = d[start + ENT * i:start + ENT * (i + 1)]
-        assert struct.unpack_from('<I', e, 0)[0] == ENT
-        size, off = struct.unpack_from('<I', e, SIZE_AT)[0], struct.unpack_from('<I', e, OFF_AT)[0]
-        ents.append(dict(id=wstr(e[4:516]), file=wstr(e[516:1028]), raw=bytearray(e), data=d[off:off + size] if size else b''))
-    return d, ents
+        entry_start = start + ENT * i
+        entry = data[entry_start:entry_start + ENT]
+        if struct.unpack_from('<I', entry)[0] != ENT:
+            raise ValueError(f'PAC partition entry {i + 1} has an invalid length')
+        size = struct.unpack_from('<I', entry, SIZE_AT)[0]
+        offset = struct.unpack_from('<I', entry, OFF_AT)[0]
+        if size:
+            if offset < table_end or offset + size > len(d):
+                raise ValueError(f'PAC partition {i + 1} lies outside the data area')
+            occupied.append((offset, offset + size, i + 1))
+        records.append((entry, offset, size))
+
+    previous_end = table_end
+    for offset, end, index in sorted(occupied):
+        if offset < previous_end:
+            raise ValueError(f'PAC partition {index} overlaps another partition')
+        previous_end = end
+    return records
+
+
+def read(path):
+    d = Path(path).read_bytes()
+    entries = [
+        dict(id=wstr(bytes(entry[4:516])), file=wstr(bytes(entry[516:1028])),
+             raw=bytearray(entry), data=d[offset:offset + size] if size else b'')
+        for entry, offset, size in partition_records(d)
+    ]
+    return d, entries
 
 
 def build(d, ents):
@@ -78,20 +112,41 @@ def build(d, ents):
     return bytes(out + body)
 
 
-def verify(d):
+def verify(d, expected=None):
+    records = partition_records(d)
     c1, c2 = struct.unpack_from('<HH', d, 0x848)
     ok1 = crc16_arc(d[:0x848]) == c1
-    ok2 = crc16_arc(d[HDR:]) == c2
+    data = memoryview(d)
+    ok2 = crc16_arc(data[HDR:]) == c2
     size_ok = struct.unpack_from('<I', d, 0x30)[0] == len(d)
     magic = struct.unpack_from('<I', d, 0x844)[0] == 0xFFFAFFFA
+    if expected is not None:
+        if len(records) != len(expected):
+            raise ValueError('rebuilt PAC has the wrong partition count')
+        for (record, offset, size), entry in zip(records, expected):
+            if record[4:516] != entry['raw'][4:516] or data[offset:offset + size] != entry['data']:
+                raise ValueError(f'rebuilt PAC partition {entry["id"]!r} does not match expected data')
     return dict(crc1=ok1, crc2=ok2, size=size_ok, magic=magic)
+
+
+def write_pac(path, data):
+    """Replace the destination only after the new image has been written in full."""
+    destination = Path(path).resolve()
+    descriptor, temp_name = mkstemp(prefix='.pac-', dir=destination.parent)
+    try:
+        with os.fdopen(descriptor, 'wb') as output:
+            output.write(data)
+        os.replace(temp_name, destination)
+    finally:
+        Path(temp_name).unlink(missing_ok=True)
 
 
 def main(argv):
     src = argv[1]
     if len(argv) > 2 and argv[2] == '--verify':
-        print(verify(open(src, 'rb').read()))
-        return
+        checks = verify(Path(src).read_bytes())
+        print(checks)
+        return 0 if all(checks.values()) else 1
     dst = argv[2]
     d, ents = read(src)
     for arg in argv[3:]:
@@ -101,15 +156,22 @@ def main(argv):
             raise SystemExit(f'no partition {pid!r}; have: {", ".join(x["id"] for x in ents)}')
         if pid in SIGNED:
             raise SystemExit(f'{pid} is a signed image - replacing it would break secure boot; refused')
-        new = open(path, 'rb').read()
+        new = Path(path).read_bytes()
         if pid == 'MMIRes' and new[:8] != b'sres0001':
             raise SystemExit('MMIRes must be an sres0001 file')
         print(f'{pid}: {len(e["data"])} -> {len(new)} bytes ({e["file"]})')
         e['data'] = new
     out = build(d, ents)
-    open(dst, 'wb').write(out)
-    print(f'{dst}: {len(out)} bytes, checks {verify(out)}', '| identical to input' if out == d else '')
+    checks = verify(out, expected=ents)
+    if not all(checks.values()):
+        raise ValueError(f'rebuilt PAC failed verification: {checks}')
+    write_pac(dst, out)
+    print(f'{dst}: {len(out)} bytes, checks {checks}', '| identical to input' if out == d else '')
+    return 0
 
 
 if __name__ == '__main__':
-    main(sys.argv)
+    try:
+        sys.exit(main(sys.argv))
+    except (ValueError, OSError) as error:
+        sys.exit(str(error))

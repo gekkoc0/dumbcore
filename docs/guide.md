@@ -30,9 +30,25 @@ python3 -I tools/dumbcore.py menu    backup/…/nv_fixed.bin       # главн�
 
 ## 3. Поменять
 
+Для первого опыта на Nokia 3210 4G TA-1618 с ПО 16.00.17.00 QB откройте папку проекта
+и подставьте путь к своему полному бэкапу. Создайте исходный макет и копию значка
+«Контактов» с изменённым цветом. В этой сборке значок находится в первой строке сетки.
+
 ```sh
-# иконка: PNG того же размера, по имени или по номеру МОДУЛЬ:ИНДЕКС
-python3 -I tools/dumbcore.py edit mmi_res.bin new.bin IMAGE_MAINMENU_ICON_CALCULATOR=calc.png
+B="/путь/к/бэкапу"
+python3 -I tools/dumbcore.py trim "$B/mmi_res.bin" mmi_res.bin
+python3 -I tools/dumbcore.py mockup mmi_res.bin "$B/nv_fixed.bin" "$B/user.bin" original/
+python3 -I -c "from PIL import Image; r,g,b,a=Image.open('original/assets/menu_02.png').convert('RGBA').split(); Image.merge('RGBA',(b,r,g,a)).save('contacts.png')"
+python3 -I tools/dumbcore.py edit mmi_res.bin new.bin IMAGE_MAINMENU_ICON_2=contacts.png
+python3 -I tools/dumbcore.py mockup new.bin "$B/nv_fixed.bin" "$B/user.bin" mockup/
+```
+
+Откройте `original/index.html` и `mockup/index.html`, затем нажмите центральную клавишу
+на каждом телефоне. Сравните цвет значка «Контактов». Для этого опыта достаточно файлов бэкапа.
+
+Другие примеры правок:
+
+```sh
 # текст (все языки или один), цвет, звук
 python3 -I tools/dumbcore.py edit mmi_res.bin new.bin "text:0:13@Russian=Меню!" COLOR_RES_IDLE_TIME=#FF8800
 # свой шрифт для латиницы и кириллицы
@@ -63,15 +79,15 @@ python3 -I tools/dumbcore.py write 0x90000004 new.bin
 воткнуть кабель. Пишется **только раздел ресурсов**; после записи раздел читается обратно и сравнивается с файлом.
 При «OK: read-back matches» выдерните кабель и включите телефон.
 
-**Откат** — та же команда с исходным файлом (`trim` от бэкапа): `python3 -I tools/dumbcore.py write 0x90000004 mmi_res.bin`.
-Загрузчик в ПЗУ телефона записью не испортить: режим `*` + кабель доступен всегда. На время экспериментов лучше
-вынуть SIM-карту и карту памяти.
+**Возврат исходных ресурсов.** Сохраните файл `mmi_res.bin`, полученный на шаге 2, до записи правок. Для возврата
+используется та же команда с исходным файлом: `python3 -I tools/dumbcore.py write 0x90000004 mmi_res.bin`.
+Полный цикл с возвратом исходных ресурсов ещё предстоит подтвердить на телефоне.
 
-## 6. Альтернатива: собрать `.pac` (не проверялось)
+## 6. Собрать и проверить `.pac`
 
 ```sh
 python3 -I tools/dumbcore.py pac official.pac my.pac MMIRes=new.bin
-python3 -I tools/pacwrite.py my.pac --verify      # проверить контрольные суммы
+python3 -I tools/pacwrite.py my.pac --verify      # проверить разметку и контрольные суммы
 ```
 
 Меняются только неподписанные разделы; образы кода с подписью сборщик трогать отказывается. Прошивка такого `.pac`

@@ -97,6 +97,9 @@ def main(argv):
         if raw[:2] == b'BM':
             open(os.path.join(adir, fname + '.bmp'), 'wb').write(raw)
             return f'assets/{fname}.bmp'
+        if raw[:4] == b'SGIF':                       # animated GIF wallpaper: 12-byte wrapper + GIF file (resenc.sgif_wrap)
+            open(os.path.join(adir, fname + '.gif'), 'wb').write(raw[12:])
+            return f'assets/{fname}.gif'
         r = decode_any(raw)
         if not r:
             return None

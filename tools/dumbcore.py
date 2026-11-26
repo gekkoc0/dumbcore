@@ -91,6 +91,10 @@ def main():
     p = s.add_parser('dump', help='бэкап телефона, только чтение (dump_phone.sh)')
     p.add_argument('mode', nargs='?', default='test', choices=['test', 'full', 'extra', 'scan', 'hidden', 'nvrun'])
 
+    p = s.add_parser('verify', help='проверить подписи прошивки и заводские данные по бэкапу')
+    p.add_argument('backup_dir', help='папка полного бэкапа (dumbcore dump full)')
+    p.add_argument('--efuse', help='готовый файл efuse.bin — для проверки отпечатка ключа HMD')
+
     a = ap.parse_args()
     if not a.cmd or a.cmd == 'help':
         ap.print_help(); return 0
@@ -119,6 +123,7 @@ def main():
     if a.cmd == 'trim': return run('sres_trim.py', a.src, a.dst).returncode
     if a.cmd == 'write': return subprocess.run(['bash', os.path.join(HERE, 'write_part.sh'), a.part, a.file]).returncode
     if a.cmd == 'dump': return subprocess.run(['bash', os.path.join(HERE, 'dump_phone.sh'), a.mode]).returncode   # shell script, not Python
+    if a.cmd == 'verify': return run('verify_phone.py', a.backup_dir, *(['--efuse', a.efuse] if a.efuse else [])).returncode
     return 0
 
 
